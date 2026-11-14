@@ -7,13 +7,16 @@ import { FileDiff } from "@opencode/schema/file-diff"
 import { Effect, Result, Schema } from "effect"
 import { Bom } from "@opencode/util/bom"
 import { toolFailure } from "../runtime.js"
+import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Formatter } from "../../formatter.js"
 import { FileMutation } from "../../file-mutation.js"
 import { Location } from "../../location.js"
 import { FileAccess } from "../../file-access.js"
 import { Patch } from "@opencode/util/patch"
+import type { ConfigExperimental } from "@opencode/schema/config/experimental"
 import { Permission } from "../../permission.js"
+import { Session } from "../../session.js"
 import DESCRIPTION from "../patch.txt"
 import GRAMMAR from "../patch-grammar.txt"
 import { fileDiff } from "./file-diff.js"
@@ -51,6 +54,8 @@ type Prepared =
 export const Plugin = {
   id: "opencode.tool.patch",
   effect: Effect.fn("PatchTool.Plugin")(function* (ctx: Context) {
+    const config = yield* Config.Service
+    const sessions = yield* Session.Service
     const environment = yield* Environment.Service
     const access = yield* FileAccess.Service
     const fileMutation = yield* FileMutation.Service
@@ -272,15 +277,15 @@ export const Plugin = {
                 const target = change.type === "update" && change.moveTarget ? change.moveTarget : change.target
                 return patchFile(change, formatted.get(target.absolute))
               })
+              const session = yield* sessions.get(context.sessionID).pipe(Effect.orElseSucceed(() => undefined))
+              const resultStyle = selectEditingResult(
+                session?.model,
+                Config.latest(yield* config.entries(), "experimental")?.editing,
+              )
               return {
                 // The multi-file patch contract intentionally leaves structured output empty.
                 output: {},
-                content: [
-                  "Success. Updated the following files:",
-                  ...files.map(
-                    (file) => `${file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M"} ${file.file}`,
-                  ),
-                ].join("\n"),
+                content: renderResult(files, resultStyle),
                 metadata: { files },
               }
             }).pipe(fileMutation.withLock(lockTargets), Effect.mapError(toolFailure("Unable to apply patch")))
@@ -290,20 +295,65 @@ export const Plugin = {
       .pipe(Effect.orDie)
 
     const hook = (event: SessionHooks["context"]) =>
-      Effect.sync(() => {
-        const usePatch =
-          event.model.id.includes("gpt-") && !event.model.id.includes("oss") && !event.model.id.includes("gpt-4")
-        if (usePatch) {
-          delete event.tools.edit
-          delete event.tools.write
-          return
+      Effect.gen(function* () {
+        const entries = yield* config.entries()
+        const tools = selectEditingTools(event.model, Config.latest(entries, "experimental")?.editing)
+        for (const name of EDITING_TOOLS) {
+          if (!tools.has(name)) delete event.tools[name]
         }
-        delete event.tools.patch
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)
     yield* ctx.session.hook("generate", hook)
   }),
+}
+
+export const EDITING_TOOLS = ["patch", "edit", "write"] as const
+type EditingTool = (typeof EDITING_TOOLS)[number]
+type ModelRef = SessionHooks["context"]["model"]
+
+function heuristicEditingTools(model: ModelRef): ReadonlySet<EditingTool> {
+  const patch = model.id.includes("gpt-") && !model.id.includes("oss") && !model.id.includes("gpt-4")
+  return new Set<EditingTool>(patch ? ["patch"] : ["edit", "write"])
+}
+
+function matchingRule(model: ModelRef | undefined, editing: ConfigExperimental.Editing | undefined) {
+  if (!model || !editing) return undefined
+  return editing.rules?.findLast((candidate) =>
+    new RegExp(candidate.match).test(`${model.providerID}/${model.id}`),
+  )
+}
+
+function selectEditingTools(model: ModelRef, editing: ConfigExperimental.Editing | undefined) {
+  const tools = new Set(heuristicEditingTools(model))
+  if (!editing) return tools
+  const delta = matchingRule(model, editing) ?? editing
+  for (const name of delta.add ?? []) tools.add(name)
+  for (const name of delta.remove ?? []) tools.delete(name)
+  return tools
+}
+
+function selectEditingResult(
+  model: ModelRef | undefined,
+  editing: ConfigExperimental.Editing | undefined,
+): ConfigExperimental.EditingResult {
+  if (!editing) return "counts"
+  return matchingRule(model, editing)?.result_style ?? editing.result_style ?? "counts"
+}
+
+function renderResult(
+  files: ReadonlyArray<typeof FileDiff.Info.Type>,
+  style: ConfigExperimental.EditingResult,
+) {
+  const label = (file: (typeof files)[number]) =>
+    `${file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M"} ${file.file}${
+      style === "summary" ? "" : ` (+${file.additions} -${file.deletions})`
+    }`
+  return [
+    "Success. Updated the following files:",
+    ...files.flatMap((file) => (style === "diff" ? [`${label(file)}\n${file.patch}`] : [label(file)])),
+    "Trust this result. Re-read only if you need surrounding context or the patch failed.",
+  ].join("\n")
 }
 
 function errorMessage(error: unknown) {
