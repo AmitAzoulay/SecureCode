@@ -27,7 +27,9 @@ import { type SessionSummary, useData } from "../context"
 import { useFileComponent } from "@opencode/ui/context/file"
 import { type UiI18n, useI18n } from "@opencode/ui/context/i18n"
 import { BasicTool, GenericTool } from "../components/basic-tool"
-import { ToolElapsed } from "../components/tool-elapsed"
+import { ToolElapsed, formatElapsed } from "../components/tool-elapsed"
+import { createElapsed } from "@opencode/ui/hooks"
+import { subagentElapsedTime } from "./subagent-elapsed"
 import { createDisclosure } from "../components/disclosure"
 import { FileIcon } from "@opencode/ui/file-icon"
 import { Icon } from "@opencode/ui/icon"
@@ -495,34 +497,19 @@ export function CurrentContextToolGroup(props: {
   // Thoughts alone are not finished work yet, so the live group reads as Thinking, in place of Working, rather than
   // "Used 1 Thought".
   const thinking = createMemo(() => props.busy && reasoning().length > 0 && reasoning().length === props.parts.length)
-  const [now, setNow] = createSignal(Date.now())
 
-  createEffect(() => {
-    if (!thinking()) return
-    setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    onCleanup(() => clearInterval(timer))
-  })
+  // The thinking row counts from its own first thought through the same shared clock and duration format as every
+  // other elapsed row, so a two-hour run reads hours here too.
+  const thinkingElapsed = createElapsed(
+    () => reasoning()[0]?.time?.created,
+    () => undefined,
+    thinking,
+  )
 
   const elapsed = createMemo(() => {
-    const started = reasoning()[0]?.time?.created
+    const value = thinkingElapsed()
 
-    if (!thinking() || started === undefined) return ""
-    const total = Math.max(0, Math.floor((now() - started) / 1000))
-    const numfmt = new Intl.NumberFormat(i18n.locale())
-
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt.format(total) })
-
-    if (total < 3600)
-      return i18n.t("ui.message.duration.minutesSeconds", {
-        minutes: numfmt.format(Math.floor(total / 60)),
-        seconds: numfmt.format(total % 60),
-      })
-
-    return i18n.t("ui.message.duration.hoursMinutes", {
-      hours: numfmt.format(Math.floor(total / 3600)),
-      minutes: numfmt.format(Math.floor(total / 60) % 60),
-    })
+    return value === undefined ? "" : formatElapsed(value, i18n)
   })
 
   const label = createMemo(() => {
@@ -1864,24 +1851,21 @@ ToolRegistry.register({
 
     const subtitle = createMemo(() => input().description || childSessionId())
 
-    // Background dispatches complete the tool call at launch, so its own timestamps would freeze at 0s.
-    // Track the child session instead: tick while it runs, freeze when it settles.
-    const start = createMemo(() => props.time?.ran ?? props.time?.created)
-    const endAt = createMemo((previous?: number) => (view().running ? undefined : (previous ?? Date.now())))
+    // Background dispatches complete the tool call at launch, so the run's end comes from the child session instead.
+    const childUpdated = createMemo(() => {
+      const id = childSessionId()
 
-    const liveTime = createMemo(() => {
-      const begin = start()
-
-      if (begin === undefined) return undefined
-
-      if (view().running) return { created: begin, ran: begin }
-
-      const realEnd = props.time?.completed
-
-      if (realEnd !== undefined && realEnd > begin) return { created: begin, ran: begin, completed: realEnd }
-
-      return { created: begin, ran: begin, completed: endAt() }
+      return id === undefined ? undefined : data.store.session.find((session) => session.id === id)?.time.updated
     })
+
+    const liveTime = createMemo(() =>
+      subagentElapsedTime({
+        begin: props.time?.ran ?? props.time?.created,
+        running: view().running,
+        childUpdated: childUpdated(),
+        completed: props.time?.completed,
+      }),
+    )
 
     const href = createMemo(() => sessionLink(childSessionId(), data.sessionHref))
     const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
