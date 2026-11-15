@@ -27,13 +27,17 @@ const layer = Layer.effect(
     const ready = yield* Latch.make(true)
     const pending = new Set<object>()
     let closed = false
+    // Settling is announced, so a client that read `ready` as false re-reads it instead of polling.
+    const announce = bus.publish(Plugin.Event.Updated, {}).pipe(Effect.asVoid)
     const holdUnsafe = () => {
       if (closed) return Effect.void
       const token = {}
       pending.add(token)
       ready.closeUnsafe()
-      return Effect.sync(() => {
-        if (pending.delete(token) && pending.size === 0) ready.openUnsafe()
+      return Effect.suspend(() => {
+        if (!pending.delete(token) || pending.size > 0) return Effect.void
+        ready.openUnsafe()
+        return announce
       })
     }
     const hold = () => Effect.sync(holdUnsafe)
@@ -269,6 +273,7 @@ const layer = Layer.effect(
       activate,
       close,
       awaitActivation: ready.await,
+      ready: Effect.sync(() => pending.size === 0),
       hold,
       list,
       gui,
