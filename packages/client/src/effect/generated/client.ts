@@ -24,6 +24,8 @@ import type {
   PluginCheckOutput,
   PluginUpdateInput,
   PluginUpdateOutput,
+  ExperimentalPluginReadyInput,
+  ExperimentalPluginReadyOutput,
   SessionListInput,
   SessionListOutput,
   SessionCreateInput,
@@ -425,6 +427,15 @@ const adaptGroupPlugin = (raw: RawClient["server.plugin"]) => ({
   gui: EndpointPluginGui(raw),
   check: EndpointPluginCheck(raw),
   update: EndpointPluginUpdate(raw),
+})
+
+const EndpointExperimentalPluginReady = (raw: RawClient["server.plugin"]) => (input?: ExperimentalPluginReadyInput) =>
+  preserveEffect<ExperimentalPluginReadyOutput>()(
+    raw["plugin.ready"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const adaptGroupExperimentalPlugin = (raw: RawClient["server.plugin"]) => ({
+  ready: EndpointExperimentalPluginReady(raw),
 })
 
 const EndpointSessionList = (raw: RawClient["server.session"]) => (input?: SessionListInput) =>
@@ -1967,9 +1978,9 @@ const adaptClient = (raw: RawClient) => {
     location: adaptGroupLocation(raw["server.location"]),
     agent: adaptGroupAgent(raw["server.agent"]),
     plugin: adaptGroupPlugin(raw["server.plugin"]),
-    session: adaptGroupSession(raw["server.session"]),
     experimental: {
       ...adaptGroupExperimental(raw["server.experimental"]),
+      plugin: adaptGroupExperimentalPlugin(raw["server.plugin"]),
       session: adaptGroupExperimentalSession(raw["server.session"]),
       generate: adaptGroupExperimentalGenerate(raw["server.generate"]),
       voice: adaptGroupExperimentalVoice(raw["server.voice"]),
@@ -1980,6 +1991,7 @@ const adaptClient = (raw: RawClient) => {
       usage: adaptGroupExperimentalUsage(raw["server.usage"]),
       config: adaptGroupExperimentalConfig(raw["server.config"]),
     },
+    session: adaptGroupSession(raw["server.session"]),
     message: adaptGroupMessage(raw["server.message"]),
     model: adaptGroupModel(raw["server.model"]),
     provider: adaptGroupProvider(raw["server.provider"]),
@@ -2005,6 +2017,11 @@ const adaptClient = (raw: RawClient) => {
   }
   return {
     ...client,
+    plugin: {
+      ...client.plugin,
+      /** @deprecated Use `client.experimental.plugin.ready`. Removed in the next minor. */
+      ready: client.experimental.plugin.ready,
+    },
     session: {
       ...client.session,
       /** @deprecated Use `client.experimental.session.stats`. Removed in the next minor. */

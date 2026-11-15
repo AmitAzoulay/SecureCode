@@ -3356,6 +3356,12 @@ export type PluginUpdateInput = {
 
 export type PluginUpdateOutput = void
 
+export type ExperimentalPluginReadyInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+}
+
+export type ExperimentalPluginReadyOutput = { location: LocationPublicRef; data: { ready: boolean } }
+
 export type SessionListInput = {
   readonly limit?: number | undefined
   readonly order?: "asc" | "desc" | undefined
@@ -4909,6 +4915,12 @@ export type ConfigShellsOutput = Array<ConfigShellOption>
 export type ExperimentalConfigUpdateInput = { readonly shell: string | null }
 
 export type ExperimentalConfigUpdateOutput = void
+
+/** @deprecated Use `ExperimentalPluginReadyInput`. Removed in the next minor. */
+export type PluginReadyInput = ExperimentalPluginReadyInput
+
+/** @deprecated Use `ExperimentalPluginReadyOutput`. Removed in the next minor. */
+export type PluginReadyOutput = ExperimentalPluginReadyOutput
 
 /** @deprecated Use `ExperimentalSessionStatsInput`. Removed in the next minor. */
 export type SessionStatsInput = ExperimentalSessionStatsInput

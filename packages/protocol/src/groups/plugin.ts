@@ -21,6 +21,21 @@ export const PluginGroup = HttpApiGroup.make("server.plugin")
       ),
   )
   .add(
+    HttpApiEndpoint.get("plugin.ready", "/api/experimental/plugin/ready", {
+      query: LocationQuery,
+      success: Location.response(Schema.Struct({ ready: Schema.Boolean })),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "experimental.plugin.ready",
+          summary: "Check plugin readiness",
+          description:
+            "Report whether the location's plugins have finished loading, without waiting. Lists such as models, agents and skills may be partial while `ready` is false. `plugin.updated` is published whenever it changes, so read it again on that event instead of polling. Experimental: may change without compatibility guarantees.",
+        }),
+      ),
+  )
+  .add(
     HttpApiEndpoint.get("plugin.gui", "/api/plugin/gui", {
       query: Schema.Struct({
         ...LocationQuery.fields,
