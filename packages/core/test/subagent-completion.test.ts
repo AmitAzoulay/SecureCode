@@ -82,7 +82,7 @@ describe("SubagentCompletion", () => {
         status: "completed",
         output: "All green\n\nBackground work still running:\n- shell (shell_1): bun test",
         notificationID,
-        recovery,
+        recovery: { ...recovery, hasOutstandingWork: true },
       })
       yield* SubagentCompletion.deliver(sessions, jobs, { status: "error", error: "boom", recovery })
       yield* SubagentCompletion.deliver(sessions, jobs, { status: "cancelled", recovery })
