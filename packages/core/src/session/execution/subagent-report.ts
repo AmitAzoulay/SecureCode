@@ -177,7 +177,7 @@ export const make = (deps: Deps) => {
               }
         const report: Job.SubagentOutboxReport = {
           notificationID: jobState.mode === "background" ? jobState.notificationID : SessionMessage.ID.create(),
-          recovery,
+          recovery: { ...recovery, hasOutstandingWork: running.length > 0 },
           status: resolved.status,
           ...(resolved.status === "completed" ? { output: formatted } : { error: formatted }),
           ...(jobState.mode === "background" ? { startedAt: jobState.startedAt } : {}),

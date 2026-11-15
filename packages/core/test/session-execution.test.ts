@@ -1422,7 +1422,8 @@ describe("SessionRestart background recovery", () => {
         run: Deferred.await(complete),
       })
       yield* jobs.background(child)
-      yield* Deferred.succeed(complete, "Recovered result")
+      const output = "Example from the docs:\n\nBackground work still running:\n- shell (sh_1): bun test"
+      yield* Deferred.succeed(complete, output)
       yield* jobs.wait({ id: child })
 
       const parentWoken = yield* Deferred.make<void>()
@@ -1444,7 +1445,12 @@ describe("SessionRestart background recovery", () => {
 
       expect(drained).toEqual([parent])
       expect(yield* SessionInbox.list(database.db, parent)).toMatchObject([
-        { payload: { text: expect.stringContaining("Recovered result"), metadata: { state: "completed" } } },
+        {
+          payload: {
+            text: `<subagent sessionID="${child}" state="completed" description="Completed inspection">\n${output}\n</subagent>`,
+            metadata: { state: "completed" },
+          },
+        },
       ])
       expect(yield* restarted.pendingBackground).toEqual([])
     }),
@@ -1471,6 +1477,7 @@ describe("SessionRestart background recovery", () => {
           childSessionID: child,
           agent: "explore",
           description: "Outbox inspection",
+          hasOutstandingWork: true,
         },
         run: Deferred.await(complete),
       })
@@ -1495,7 +1502,7 @@ describe("SessionRestart background recovery", () => {
       yield* Context.get(context, SessionRestart.Service).resumeSuspendedSessions
       yield* Deferred.await(parentWoken)
 
-      // Replay delivers the formatted row verbatim, its still-running list labelling the tag; the child never runs again.
+      // Replay uses the snapshot even though the shell is no longer running.
       expect(drained).toEqual([parent])
       expect(yield* SessionInbox.list(database.db, parent)).toMatchObject([
         {
