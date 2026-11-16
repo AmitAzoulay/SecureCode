@@ -12,6 +12,7 @@ import { Project } from "./project.js"
 import { AbsolutePath } from "./schema.js"
 import type { SessionErrors } from "./session/error.js"
 import type { Tool } from "./tool.js"
+import fs from "fs"
 
 export const Kind = Schema.Literals(["file", "directory"])
 export type Kind = typeof Kind.Type
@@ -87,34 +88,44 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const permission = yield* Permission.Service
 
+   
     const resolve = Effect.fn("FileAccess.resolve")(function* (input: ResolveInput) {
-      const absolute = AbsolutePath.make(resolvePath(location.directory, input.path))
-      const worktree = path.resolve(location.project.directory)
-      const internal =
-        FSUtil.contains(location.directory, absolute) ||
-        (worktree !== path.parse(worktree).root && FSUtil.contains(worktree, absolute))
-      if (internal) {
-        return {
-          absolute,
-          resource: slash(path.relative(location.directory, absolute) || "."),
-        } satisfies Target
-      }
-      const type =
-        input.kind ??
-        (yield* Environment.typeFollowing(files, absolute).pipe(
-          Effect.catchTag("Environment.NotFound", () => Effect.undefined),
-        ))
-      const directory = AbsolutePath.make(type === "directory" ? absolute : path.dirname(absolute))
+    const rawAbsolute = resolvePath(location.directory, input.path)
+    let realSessionRoot = path.resolve(location.directory)
+    let realTarget = rawAbsolute
+    try {
+      realSessionRoot = fs.realpathSync(realSessionRoot)
+      realTarget = fs.existsSync(rawAbsolute)
+        ? fs.realpathSync(rawAbsolute)
+        : path.join(fs.realpathSync(path.dirname(rawAbsolute)), path.basename(rawAbsolute))
+    } catch {
+        // Fallback if parent directory does not exist yet
+    }
+    const absolute = AbsolutePath.make(realTarget)
+      // Strictly confine to location.directory ONLY (do NOT allow parent git worktree directories)
+    const internal = FSUtil.contains(realSessionRoot, realTarget)
+    if (internal) {
       return {
         absolute,
-        resource: slash(absolute),
-        externalDirectory: {
-          action: "external_directory",
-          directory,
-          resource: slash(path.join(directory, "*")),
-          save: slash(path.join((yield* Project.root({ exists }, directory)) ?? directory, "*")),
-        },
+        resource: slash(path.relative(realSessionRoot, realTarget) || "."),
       } satisfies Target
+    }
+    const type =
+      input.kind ??
+      (yield* Environment.typeFollowing(files, absolute).pipe(
+        Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+      ))
+    const directory = AbsolutePath.make(type === "directory" ? absolute : path.dirname(absolute))
+    return {
+      absolute,
+      resource: slash(absolute),
+      externalDirectory: {
+        action: "external_directory",
+        directory,
+        resource: slash(path.join(directory, "*")),
+        save: slash(path.join((yield* Project.root({ exists }, directory)) ?? directory, "*")),
+      },
+    } satisfies Target
     })
 
     const authorizeExternal = Effect.fn("FileAccess.authorizeExternal")(function* (

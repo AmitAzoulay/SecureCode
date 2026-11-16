@@ -36,3 +36,11 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 /artifacts/
+
+# Bun & local sandbox artifacts
+.bun/
+bun.lockb
+node_modules/
+.opencode/tmp/
+opencode-win32-sandbox*.exe
+opencode-win32-sandbox*.cs

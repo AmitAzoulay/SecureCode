@@ -8,9 +8,11 @@ import { Environment } from "./environment/index.js"
 import { FileAccess } from "./file-access.js"
 import { FileMutation } from "./file-mutation.js"
 import { Formatter } from "./formatter.js"
+import { Location } from "./location.js" // <-- CHANGE 1: Add Location import
 import { Permission } from "./permission.js"
 import type { SessionErrors } from "./session/error.js"
 import { fileDiff } from "./tool/plugin/file-diff.js"
+import { Win32Sandbox } from "./win32-sandbox.js" // <-- CHANGE 1: Add Win32Sandbox import
 
 export interface WriteInput {
   readonly path: string
@@ -23,7 +25,7 @@ export interface Written extends FileMutation.TextWriteResult {
 }
 
 export interface Interface {
-  /** Resolve a file to write and obtain external-directory approval. */
+  /** Resolve a file to write and enforce session-directory confinement. */
   readonly target: (
     file: string,
     context: FileAccess.Invocation,
@@ -58,12 +60,31 @@ const layer = Layer.effect(
     const environment = yield* Environment.Service
     const fileMutation = yield* FileMutation.Service
     const formatter = yield* Formatter.Service
+    const location = yield* Location.Service // <-- CHANGE 2: Yield Location.Service
     const permission = yield* Permission.Service
 
+    // <-- CHANGE 3: Replace authorizeExternal() with hard OS-level confinement check
     const target = Effect.fn("FileWrite.target")(function* (file: string, context: FileAccess.Invocation) {
-      const target = yield* access.resolve({ path: file, kind: "file" })
-      yield* access.authorizeExternal([target], context)
-      return target
+      const resolved = yield* access.resolve({ path: file, kind: "file" })
+      if (resolved.externalDirectory) {
+        if (process.platform === "win32") {
+          yield* Effect.try({
+            try: () => Win32Sandbox.writeFileRestrictedSync(location.directory, resolved.absolute, new Uint8Array(0)),
+            catch: (err) =>
+              new Environment.Failed({
+                operation: "write",
+                path: resolved.absolute,
+                cause: err,
+              }),
+          })
+        }
+        return yield* new Environment.Failed({
+          operation: "write",
+          path: resolved.absolute,
+          cause: new Error(`[OS Confinement] Write denied outside session directory (${location.directory})`),
+        })
+      }
+      return resolved
     })
 
     const authorize = Effect.fn("FileWrite.authorize")(function* (
@@ -107,5 +128,6 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Environment.node, FileAccess.node, FileMutation.node, Formatter.node, Permission.node],
+  // <-- CHANGE 4: Add Location.node to deps
+  deps: [Environment.node, FileAccess.node, FileMutation.node, Formatter.node, Location.node, Permission.node],
 })

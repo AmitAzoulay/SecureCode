@@ -22,6 +22,7 @@ import { SessionSchema } from "./session/schema.js"
 import { Config } from "./config.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
+import { Win32Sandbox } from "./win32-sandbox.js"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
   id: Shell.ID,
@@ -284,8 +285,17 @@ const layer = () =>
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)
 
+        // Replace lines 287-318 in packages/core/src/shell.ts:
         const id = Shell.ID.ascending()
-        const args = ShellSelect.args(invocation.shell, invocation.command)
+        const rawArgs = ShellSelect.args(invocation.shell, invocation.command)
+        const wrapped = Win32Sandbox.wrapShellSpawn(
+          location.directory,
+          invocation.cwd,
+          invocation.shell,
+          rawArgs,
+          invocation.env,
+        )
+        invocation.env = wrapped.env
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {
@@ -299,18 +309,15 @@ const layer = () =>
           time: { started: Date.now() },
         }
 
-        // Spawn through the Environment and stream combined output to the file. The handle is scope-bound, so
-        // the managing fiber keeps its scope open until the command terminates (it awaits `done` at the
-        // end). `create` returns once `ready` resolves with the registered command.
         const ready = Deferred.makeUnsafe<Active, AppProcess.AppProcessError>()
         runFork(
           Effect.scoped(
             Effect.gen(function* () {
               const handle = yield* environment.spawner
                 .spawn(
-                  ChildProcess.make(invocation.shell, args, {
-                    cwd: invocation.cwd,
-                    env: invocation.env,
+                  ChildProcess.make(wrapped.executable, wrapped.args, {
+                    cwd: wrapped.cwd,
+                    env: wrapped.env,
                     stdin: "ignore",
                     detached: process.platform !== "win32",
                     forceKillAfter: Duration.seconds(3),
