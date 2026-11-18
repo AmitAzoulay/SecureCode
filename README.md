@@ -1,114 +1,72 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/@opencode/cli"><img alt="npm" src="https://img.shields.io/npm/v/@opencode/cli?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/release.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/release.yml?style=flat-square&branch=dev" /></a>
-</p>
+# SecureCode
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+**SecureCode** is a security-hardened fork of [OpenCode](https://github.com/anomalyco/opencode) built for running AI coding agents locally with **OS-kernel-enforced directory write confinement** on Windows and **Pre-LLM Secret Redaction (DLP)**.
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+Instead of relying solely on application-level permission prompts or path-string checks, SecureCode enforces boundaries directly at the Windows Security Reference Monitor (SRM) and at the LLM network/tool boundaries.
 
 ---
 
-### Installation
+## Security Architecture
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/v2/install | bash
+### 1. Windows OS-Level Directory Write Confinement
+Every shell command and out-of-workspace file write attempt is confined to the active session directory (`location.directory`) at the **Windows Kernel level** — without requiring Administrator privileges, WSL2, or containers.
 
-# Package managers
-npm i -g @opencode/cli@latest      # or bun/pnpm/yarn
-brew install anomalyco/tap/opencode-v2 # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-beta              # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run github:anomalyco/opencode  # Nix
-```
+* **Restricted Access Token (`WRITE_RESTRICTED`):** Child processes are spawned via `CreateProcessAsUserW` using `CreateRestrictedToken` (`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED`) with a deterministic per-workspace synthetic capability SID (`S-1-5-99-...`).
+* **Per-Session NTFS DACL:** An inheritable `(OI)(CI)` Modify ACE for the session's synthetic SID is applied strictly to the active session directory and `<sessionDir>/.opencode/tmp`. Because no other path on disk carries this ACE, the Windows kernel (`SeAccessCheck` / `NtCreateFile`) rejects any write outside the session directory with `STATUS_ACCESS_DENIED` (`0xC0000022`).
+* **DLL & Runtime Compatibility:** Updates `TokenDefaultDacl` via `SetTokenInformation` so PowerShell (`pwsh.exe` / `powershell.exe`), Git Bash, Node.js, and .NET runtimes initialize cleanly under `WRITE_RESTRICTED` without `0xC0000142` crashes.
+* **Windows Job Objects:** Binds spawned process trees to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object so child processes cannot escape or outlive the session.
+* **Realpath & Worktree Lockdown:** Resolves symlinks and NTFS junctions via `fs.realpathSync` and restricts internal access strictly to `location.directory` (preventing parent Git worktree traversal).
+* **Environment Redirection:** Redirects `TEMP`, `TMP`, `TMPDIR`, `HOME`, `USERPROFILE`, `NPM_CONFIG_CACHE`, and `BUN_INSTALL_CACHE_DIR` into `<sessionDir>/.opencode/tmp` so toolchains function normally inside the sandbox.
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+#### Verified Enforcement Scope (Windows)
+| Operation Outside Session Directory | Result |
+| :--- | :--- |
+| Create / write / append file (`shell` or `write`/`edit` tools) | **Blocked** (`Access Denied` / `UnauthorizedAccessException`) |
+| Write to parent directory (`..\`) inside the same Git repo | **Blocked** |
+| Nested grandchild process writes (`cmd` -> `powershell`) | **Blocked** (restricted token inherited) |
+| Write through an NTFS Junction (`mklink /J`) pointing outside | **Blocked** (kernel checks target DACL) |
+| Registry modifications (`reg add HKCU\...`) | **Blocked** (`Access is denied`) |
 
-### Desktop App (BETA)
-
-OpenCode is also available as a desktop application. Download it from [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-win-x64.exe`     |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
-
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-```
-
-#### Installation Directory
-
-The install script installs OpenCode to `$HOME/.opencode/bin`.
-
-### Agents
-
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
-
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
-
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
-
-Learn more about [agents](https://opencode.ai/v2/docs/agents).
-
-### Documentation
-
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/v2/docs).
-
-### Contributing
-
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on OpenCode
-
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+> **Scope note:** `WRITE_RESTRICTED` enforces **write integrity** (preventing unauthorized file/registry creation or modification outside the session directory). Global reads and outbound network access remain permitted so installed compilers, runtimes, and package managers continue to operate.
 
 ---
 
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+### 2. Pre-LLM Secret Redaction (DLP)
+SecureCode prevents API keys, tokens, passwords, and private keys from leaving your machine to external LLM providers or being persisted in plaintext in session history.
+
+Redaction runs at **two mandatory chokepoints**:
+1. **Tool Output Boundary (`packages/core/src/tool/runtime.ts`):** Every tool result (`read`, `shell`, `grep`, `webfetch`, MCP tools) is scanned and masked before entering session history.
+2. **Pre-Network Model Gate (`packages/core/src/session/model-request.ts`):** Every `system` prompt and `messages` payload is recursively scanned right before `ai.request(...)` dispatches to `LLMClient.Service`, catching secrets even if pasted directly into a user prompt.
+
+#### Detection Layers (`packages/core/src/dlp/secret-redactor.ts`)
+* **Layer 1 — Provider & Format Signatures:** 30+ patterns including AWS (`AKIA...`), GitHub (`ghp_`, `github_pat_`), GitLab, OpenAI/Anthropic (`sk-...`), Google (`AIza...`), Stripe (`sk_live_`/`rk_live_`), Slack, Discord, Telegram, npm/PyPI/Docker tokens, JWTs, PEM/PGP/SSH private key blocks, `Authorization: Bearer` headers, CLI secret flags (`--password`), URL query parameters, and DB connection URIs (`postgres://user:pass@host`).
+* **Layer 2 — Universal Key-Value Parser:** Detects sensitive key assignments across `.env`, JSON, YAML, TOML, and source code while preserving structure.
+* **Layer 3 — Context-Free Shannon Entropy Scanner:** Catches high-entropy random tokens (`20+` chars) even under innocent variable names (e.g., `FOOBAR="..."`), while filtering out UUIDs, file paths, plain URLs, numbers, and template references (`${VAR}`).
+* **Consistent Per-Session Placeholders:** Replaces secrets deterministically per session (e.g., `[REDACTED_STRIPE_KEY_1]`) so the model can reason about code references without ever seeing raw secret values.
+
+---
+
+## Key Modified & Added Files
+
+* `packages/core/src/win32-sandbox.ts` — Native Win32 restricted token, NTFS DACL, and Job Object runner (`opencode-win32-sandbox-v2.exe`).
+* `packages/core/src/shell.ts` — Wraps shell execution via `Win32Sandbox.wrapShellSpawn` and redirects temp/cache env vars.
+* `packages/core/src/file-access.ts` — Enforces strict `location.directory` realpath confinement.
+* `packages/core/src/file-write.ts` — Routes out-of-directory `write`/`edit` attempts through the OS-restricted runner.
+* `packages/core/src/dlp/secret-redactor.ts` — Multi-layer regex, KV, and entropy secret redactor.
+* `packages/core/src/tool/runtime.ts` — Redacts all tool outputs before returning to the session.
+* `packages/core/src/session/model-request.ts` — Redacts `system` and `messages` before dispatching to the LLM.
+
+---
+
+## Quick Start (Development / Standalone)
+
+```powershell
+git clone [https://github.com/AmitAzoulay/SecureCode.git](https://github.com/AmitAzoulay/SecureCode.git)
+cd SecureCode
+bun install
+
+# Typecheck core
+bun run --cwd packages/core typecheck
+
+# Launch a confined standalone session on a target directory
+bun run --cwd packages/cli src/index.ts --standalone C:\path\to\your\project
