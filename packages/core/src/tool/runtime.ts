@@ -4,6 +4,7 @@ import { Tool } from "@opencode/schema/tool"
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec"
 import { Effect, JsonPointer, JsonSchema, Result, Schema, SchemaIssue, SchemaRepresentation } from "effect"
 import { $ZodType, toJSONSchema } from "zod/v4/core"
+import { SecretRedactor } from "../dlp/secret-redactor.js"
 
 const formatEffectIssues = SchemaIssue.makeFormatterStandardSchemaV1()
 
@@ -44,19 +45,25 @@ export const execute = (tool: Tool.Info<any, any>, input: unknown, context: Tool
             }),
       ),
     )
+    const sid = String((context as { sessionID?: unknown }).sessionID ?? "global")
     if (tool.output === undefined) {
       if ("output" in result) return yield* Effect.die("Tool result declared output without an output schema")
+      const rawContent = normalizeContent(result.content)
+      const { value: content } = SecretRedactor.redactDeep(rawContent, sid)
       return {
         output: undefined,
-        content: normalizeContent(result.content),
+        content,
         ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
       }
     }
     if (!("output" in result)) return yield* new Tool.Error({ message: "Tool did not return its declared output" })
-    const output = yield* encodeOutput(tool.output, result.output)
+    const encodedOutput = yield* encodeOutput(tool.output, result.output)
+    const { value: output } = SecretRedactor.redactDeep(encodedOutput, sid)
+    const rawContent = normalizeContent(result.content, output)
+    const { value: content } = SecretRedactor.redactDeep(rawContent, sid)
     return {
       output,
-      content: normalizeContent(result.content, output),
+      content,
       ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
     }
   })

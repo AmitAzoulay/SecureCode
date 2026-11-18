@@ -72,14 +72,12 @@ const layer = Layer.effect(
             try: () => Win32Sandbox.writeFileRestrictedSync(location.directory, resolved.absolute, new Uint8Array(0)),
             catch: (err) =>
               new Environment.Failed({
-                operation: "write",
                 path: resolved.absolute,
                 cause: err,
               }),
           })
         }
         return yield* new Environment.Failed({
-          operation: "write",
           path: resolved.absolute,
           cause: new Error(`[OS Confinement] Write denied outside session directory (${location.directory})`),
         })
